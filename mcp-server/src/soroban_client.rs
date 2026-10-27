@@ -20,6 +20,9 @@ pub struct SorobanConfig {
     pub network: String,
     pub identity: String,
     pub rule_id: u32,
+    /// G-address of the agent key. Read from the environment; never a secret.
+    #[allow(dead_code)]
+    pub agent_pubkey: String,
 }
 
 impl Default for SorobanConfig {
@@ -41,6 +44,7 @@ impl SorobanConfig {
                 .ok()
                 .and_then(|s| s.parse().ok())
                 .unwrap_or(0),
+            agent_pubkey: std::env::var("AGENT_SIGNER_PUBKEY").unwrap_or_default(),
         }
     }
 
@@ -216,7 +220,56 @@ pub fn query_rule_count(config: &SorobanConfig) -> Result<u32> {
         .ok_or_else(|| anyhow!("could not parse rule count"))
 }
 
+/// One Soroban transaction: the smart account authorizes the vendor call,
+/// and the vendor contract collects its fee inside that same invocation.
+pub struct PayAndCallTx {
+    pub tx_hash: String,
+    pub ledger: u32,
+    pub response: String,
+}
+
+pub fn pay_and_call_tx(
+    config: &SorobanConfig,
+    resource_contract: &str,
+    method: &str,
+    amount: i128,
+) -> Result<PayAndCallTx, PayAndCallError> {
+    if !config.is_live() {
+        return Err(PayAndCallError::TransientError(
+            "ACCOUNT_CONTRACT_ID is not set".into(),
+        ));
+    }
+    let amount_s = amount.to_string();
+    let out = stellar_invoke(
+        config,
+        &[
+            "--id",
+            resource_contract,
+            "--source-account",
+            &config.account_contract_id,
+            "--send=yes",
+            "--",
+            method,
+            "--amount",
+            &amount_s,
+        ],
+    )?;
+    let hash = parse_tx_hash(&out).unwrap_or_default();
+    if hash.is_empty() {
+        return Err(PayAndCallError::AuthFailed(format!(
+            "no tx hash in stellar output: {out}"
+        )));
+    }
+    let (tx_hash, ledger) = poll_get_transaction(&config.rpc_url, &hash, 20)?;
+    Ok(PayAndCallTx {
+        tx_hash,
+        ledger,
+        response: out.trim().to_string(),
+    })
+}
+
 /// Submit a vendor call authorized by the smart account (`--source-account`).
+#[allow(dead_code)]
 pub fn submit_transaction(
     config: &SorobanConfig,
     resource_contract: &str,
@@ -273,6 +326,7 @@ pub fn send_transaction_xdr(
     poll_get_transaction(&config.rpc_url, &hash, 20)
 }
 
+#[allow(dead_code)]
 pub fn call_resource(
     config: &SorobanConfig,
     resource_contract: &str,

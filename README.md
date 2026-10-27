@@ -230,9 +230,9 @@ AgentPay/
 
 ## Current Status
 
-- Smart account: initialize, set_spend_policy, apply_policy (per-vendor `CallContract` rules + spend/rate policy on `__check_auth`), optional `set_agent_guard` (`verify_agent` before spend), get_remaining_budget, rolling window, events
+- Smart account: initialize, set_spend_policy, apply_policy (per-vendor `CallContract` rules + spend/rate policy on `__check_auth`, plus payee-scoped SEP-41 token transfer rules keyed by `(asset, pay_to)`), optional `set_agent_guard` (`verify_agent` before spend), get_remaining_budget, rolling window, events
 - MCP: discover; check_budget from on-chain account when `ACCOUNT_CONTRACT_ID` is set (else `AGENTPAY_STATE`); pay_and_call submits via Stellar CLI + polls `getTransaction` (no stub hash on the live path); bounded retry on `TransientError` only
-- Policy generator: p95 × 1.5 caps + allowlist; empty logs rejected
+- Policy generator: p95 × 1.5 caps + allowlist (supporting both legacy vendor contracts and `(asset, pay_to)` payee rules); empty logs rejected
 - Demo console: SQLite persistence, operator/reader keys, stepped pitch API, per-vendor budget, deterministic tx hashes, tx-log export, polished operator UI (responsive, a11y, toasts, loading, empty/reset)
 - Deploy: `./scripts/deploy_testnet.sh` runs simulate → generate → deploy two instances → initialize → apply_policy; links AgentGuard when `AGENTGUARD_CONTRACT_ID` is set (`AGENTGUARD_REQUIRED_ROLE`, default Basic)
 - CI: local `scripts/ci.sh` and GitHub Actions (fmt, clippy, cargo test, ruff, pytest)

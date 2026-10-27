@@ -15,6 +15,10 @@ pub struct Resource {
     pub method: String,
     pub price: u64,
     pub description: String,
+    #[serde(default)]
+    pub fee_stroops: u64,
+    #[serde(default)]
+    pub token: String,
 }
 
 /// Load resources from the embedded registry JSON.

@@ -24,9 +24,7 @@ def test_migrate_creates_tables(tmp_path):
     migrate(conn)
     names = {
         row[0]
-        for row in conn.execute(
-            "SELECT name FROM sqlite_master WHERE type='table'"
-        ).fetchall()
+        for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'").fetchall()
     }
     assert "sessions" in names
     assert "schema_migrations" in names

@@ -21,9 +21,7 @@ def connect(db_path: str | Path | None = None) -> sqlite3.Connection:
 def migrate(conn: sqlite3.Connection) -> None:
     sql = SCHEMA_PATH.read_text(encoding="utf-8")
     conn.executescript(sql)
-    conn.execute(
-        "INSERT OR IGNORE INTO schema_migrations (id, name) VALUES (1, 'initial')"
-    )
+    conn.execute("INSERT OR IGNORE INTO schema_migrations (id, name) VALUES (1, 'initial')")
     conn.commit()
 
 
@@ -237,6 +235,3 @@ def import_registry(conn: sqlite3.Connection, resources: list[dict]) -> None:
 
 def list_resources(conn: sqlite3.Connection) -> list[sqlite3.Row]:
     return conn.execute("SELECT * FROM resources ORDER BY id").fetchall()
-
-
-

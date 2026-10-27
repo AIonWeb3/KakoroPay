@@ -5,6 +5,8 @@
     "contract_id": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
     "method": "get_weather",
     "price": 50,
+    "fee_stroops": 50,
+    "token": "native",
     "description": "Real-time weather data oracle. Returns temperature, humidity, and conditions for any location. Updated every 5 minutes from multiple data sources."
   },
   {
@@ -13,6 +15,8 @@
     "contract_id": "CBQHNAXSI55GX2GN6D67GK7BHVPSLJUGZQEU7WJ5LKR5PNUCGLIMAO4K",
     "method": "get_price",
     "price": 100,
+    "fee_stroops": 100,
+    "token": "native",
     "description": "Aggregated cryptocurrency price feed. Supports BTC, ETH, XLM, and 50+ tokens. Returns price, 24h change, and volume. Data from 5 major exchanges."
   },
   {
@@ -21,6 +25,20 @@
     "contract_id": "CA7QYNF7SOVZ3SS4KVQNHOACI3BSZAHH7KX4IXOFCPXBZW32PCBHFCLJ",
     "method": "run_inference",
     "price": 500,
+    "fee_stroops": 500,
+    "token": "native",
     "description": "On-chain AI inference service. Submit prompts for GPT-class text generation. Supports up to 4096 tokens. Response includes inference hash for verification."
+  },
+  {
+    "id": "demo-payee-vendor",
+    "name": "Demo Payee Vendor (x402)",
+    "contract_id": "CDEMO5TOKN1ASSET1ADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+    "method": "transfer",
+    "price": 200,
+    "fee_stroops": 200,
+    "token": "demo-token",
+    "asset": "CDEMO5TOKN1ASSET1ADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+    "pay_to": "GDEMO5VENDOR1PAYEEADDRESXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+    "description": "x402-style SEP-41 payment to a demo vendor. Uses transfer(from, pay_to, amount) on the token contract. Budget is scoped per (asset, pay_to) pair independently of other payees."
   }
 ]

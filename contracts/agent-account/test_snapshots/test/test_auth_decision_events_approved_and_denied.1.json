@@ -46,6 +46,12 @@
                   "map": [
                     {
                       "key": {
+                        "symbol": "agent_signer"
+                      },
+                      "val": "void"
+                    },
+                    {
+                      "key": {
                         "symbol": "allowed_contracts"
                       },
                       "val": {
@@ -553,6 +559,22 @@
                       "key": {
                         "vec": [
                           {
+                            "symbol": "ActiveRuleIds"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "vec": [
+                          {
+                            "u32": 0
+                          }
+                        ]
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
                             "symbol": "Admin"
                           }
                         ]
@@ -571,6 +593,18 @@
                       },
                       "val": {
                         "u32": 1
+                      }
+                    },
+                    {
+                      "key": {
+                        "vec": [
+                          {
+                            "symbol": "LastRuleId"
+                          }
+                        ]
+                      },
+                      "val": {
+                        "u32": 0
                       }
                     },
                     {
