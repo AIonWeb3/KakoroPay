@@ -220,6 +220,39 @@ pub fn query_rule_count(config: &SorobanConfig) -> Result<u32> {
         .ok_or_else(|| anyhow!("could not parse rule count"))
 }
 
+pub fn query_payee_rule(config: &SorobanConfig, asset: &str, pay_to: &str) -> Result<Option<u32>> {
+    if !config.is_live() {
+        return Err(anyhow!("ACCOUNT_CONTRACT_ID is not set"));
+    }
+    let out = stellar_invoke(
+        config,
+        &[
+            "--id",
+            &config.account_contract_id,
+            "--",
+            "get_payee_rule",
+            "--asset",
+            asset,
+            "--pay_to",
+            pay_to,
+        ],
+    )
+    .map_err(|e| anyhow!("{e}"))?;
+    let trimmed = out.trim();
+    if trimmed.is_empty() || trimmed == "null" || trimmed == "None" {
+        return Ok(None);
+    }
+    if let Some(rule_id) = trimmed
+        .lines()
+        .rev()
+        .find_map(|l: &str| l.trim().parse::<u32>().ok())
+    {
+        Ok(Some(rule_id))
+    } else {
+        Ok(None)
+    }
+}
+
 /// One Soroban transaction: the smart account authorizes the vendor call,
 /// and the vendor contract collects its fee inside that same invocation.
 pub struct PayAndCallTx {

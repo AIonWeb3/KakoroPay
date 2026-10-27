@@ -3,12 +3,22 @@
 use serde::{Deserialize, Serialize};
 use std::path::Path;
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PayeeRule {
+    pub asset: String,
+    pub pay_to: String,
+    #[serde(default)]
+    pub rule_id: u32,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BudgetStatus {
     pub remaining_stroops: i128,
     pub remaining_xlm: f64,
     pub period_ledgers: u32,
     pub rule_count: u32,
+    #[serde(default)]
+    pub allowed_payees: Option<Vec<PayeeRule>>,
 }
 
 impl Default for BudgetStatus {
@@ -18,6 +28,7 @@ impl Default for BudgetStatus {
             remaining_xlm: 1.0,
             period_ledgers: 17_280,
             rule_count: 3,
+            allowed_payees: None,
         }
     }
 }
