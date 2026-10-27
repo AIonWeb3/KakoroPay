@@ -1394,6 +1394,102 @@ mod tests {
     }
 
     #[test]
+    fn test_ssrf_redirect_to_private_ip_not_followed() {
+        let server = MockServer::start(|stream, count| {
+            if count == 1 {
+                let resp = "HTTP/1.1 302 Found\r\nLocation: https://10.0.0.1/admin\r\nContent-Length: 0\r\n\r\n";
+                let _ = stream.write_all(resp.as_bytes());
+            } else {
+                panic!(
+                    "Redirect should not be followed: unexpected request {}",
+                    count
+                );
+            }
+        });
+
+        with_stub_payer("", || {
+            let res = pay_and_call_url_with_config(&server.url(), &SorobanConfig::default(), true)
+                .unwrap();
+            assert_eq!(res.status, 302);
+            assert_eq!(res.amount, 0);
+            assert!(res.tx_hash.is_empty());
+        });
+    }
+
+    #[test]
+    fn test_successful_paid_call_second_call_does_not_double_pay() {
+        let server = MockServer::start(|stream, req_num| {
+            if req_num == 1 {
+                let req_json = serde_json::json!({
+                    "scheme": "exact",
+                    "network": "stellar:testnet",
+                    "asset": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
+                    "payTo": "GB7B2YWT5ELTMVDQREHAQDMIFMTKOR3TOEDOYW3ONM2ZMZGIF6CS2BA3",
+                    "amount": "1000"
+                });
+                let body = req_json.to_string();
+                let resp = format!(
+                    "HTTP/1.1 402 Payment Required\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{}",
+                    body.len(),
+                    body
+                );
+                let _ = stream.write_all(resp.as_bytes());
+            } else if req_num == 2 {
+                let settlement = serde_json::json!({
+                    "tx_hash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+                    "ledger": 1234
+                });
+                let encoded_settlement = BASE64.encode(settlement.to_string().as_bytes());
+                let resp = format!(
+                    "HTTP/1.1 200 OK\r\nPayment-Response: {}\r\nContent-Length: 14\r\n\r\nPaid Resource!",
+                    encoded_settlement
+                );
+                let _ = stream.write_all(resp.as_bytes());
+            } else {
+                // Subsequent call: server returns 200 directly because resource is unlocked
+                let resp = "HTTP/1.1 200 OK\r\nContent-Length: 14\r\n\r\nPaid Resource!";
+                let _ = stream.write_all(resp.as_bytes());
+            }
+        });
+
+        let stub = r#"
+            const readline = require('readline');
+            const rl = readline.createInterface({ input: process.stdin });
+            let input = '';
+            rl.on('line', (line) => { input += line; });
+            rl.on('close', () => {
+                console.log(JSON.stringify({
+                    ok: true,
+                    payment_payload: { transaction: 'AAAA_SIGNED' },
+                    rule_id: 1,
+                    header_name: 'X-PAYMENT',
+                    header_value: 'ZXhhbXBsZV9wYXlsb2Fk'
+                }));
+            });
+        "#;
+
+        with_stub_payer(stub, || {
+            let res1 = pay_and_call_url_with_config(&server.url(), &SorobanConfig::default(), true)
+                .unwrap();
+            assert_eq!(res1.status, 200);
+            assert_eq!(res1.body, "Paid Resource!");
+            assert_eq!(res1.amount, 1000);
+            assert_eq!(
+                res1.tx_hash,
+                "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+            );
+
+            // Second call: resource is already paid, returned without payment
+            let res2 = pay_and_call_url_with_config(&server.url(), &SorobanConfig::default(), true)
+                .unwrap();
+            assert_eq!(res2.status, 200);
+            assert_eq!(res2.body, "Paid Resource!");
+            assert_eq!(res2.amount, 0);
+            assert!(res2.tx_hash.is_empty());
+        });
+    }
+
+    #[test]
     fn test_error_malformed_requirements() {
         let server = MockServer::start(|stream, _| {
             let resp = "HTTP/1.1 402 Payment Required\r\nContent-Type: application/json\r\nContent-Length: 22\r\n\r\n{\"malformed\": \"data\"}";
