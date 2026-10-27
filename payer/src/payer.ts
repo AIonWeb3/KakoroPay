@@ -130,10 +130,15 @@ export async function processPayment(
         paymentReqs as unknown as Parameters<ExactStellarScheme['createPaymentPayload']>[1]
       );
 
+      const headerName = (result as { x402Version?: number }).x402Version === 2 ? 'PAYMENT-SIGNATURE' : 'X-PAYMENT';
+      const headerValue = Buffer.from(JSON.stringify(result.payload)).toString('base64');
+
       return {
         ok: true,
         payment_payload: result.payload as { transaction: string; [k: string]: unknown },
         rule_id: ruleId,
+        header_name: headerName,
+        header_value: headerValue,
       };
     } catch (simError) {
       const { code, message } = mapSimulationError(simError);

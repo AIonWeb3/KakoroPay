@@ -35,6 +35,8 @@ describe('Payer Worker CLI and Payment Processing', () => {
     if (result.ok) {
       expect(result.payment_payload.transaction).toBe('AAAA_MOCK_SIGNED_TX_XDR_BASE64');
       expect(result.rule_id).toBe(3);
+      expect(result.header_name).toBe('X-PAYMENT');
+      expect(result.header_value).toBeDefined();
     }
     expect(mockSchemeClient.createPaymentPayload).toHaveBeenCalledOnce();
   });

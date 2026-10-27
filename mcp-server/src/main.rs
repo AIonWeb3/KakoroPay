@@ -32,8 +32,15 @@ struct DiscoverArgs {
 
 #[derive(Debug, Clone, Deserialize, JsonSchema)]
 struct PayArgs {
-    resource_id: String,
-    params: String,
+    /// Registry resource ID (e.g. "weather-oracle", "price-feed") for legacy catalog calls.
+    #[serde(default)]
+    resource_id: Option<String>,
+    /// JSON parameters for the resource call.
+    #[serde(default)]
+    params: Option<String>,
+    /// Target HTTPS URL for direct x402 HTTP resource payment and invocation.
+    #[serde(default)]
+    url: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
@@ -73,13 +80,17 @@ impl AgentPayServer {
 
     /// Pay for and call a resource.
     #[tool(
-        description = "Pay for and invoke a paid resource. Submits a Soroban transaction through the agent's smart account, enforcing spending policies. Returns tx hash, amount spent, and the resource response. Errors include: PolicyDenied, InsufficientBudget, ResourceNotFound, ResourceCallFailed."
+        description = "Pay for and invoke a paid resource. Supports either an x402 paid HTTPS URL or a registry resource ID. Submits payment through the agent's smart account or external payer worker, enforcing spending policies. Returns status, body, tx hash, amount, asset, and pay_to. Errors include: InvalidUrl, BlockedTarget, PaymentRequirementsInvalid, NetworkMismatch, OverCeiling, PolicyDenied, BudgetExceeded, PayerFailed, PayerTimeout, FacilitatorRejected, SettlementMissing, InsufficientBudget, ResourceNotFound, ResourceCallFailed."
     )]
     async fn pay_and_call(
         &self,
         Parameters(args): Parameters<PayArgs>,
     ) -> Result<String, McpError> {
-        let text = match tools::pay_and_call::pay_and_call(&args.resource_id, &args.params) {
+        let text = match tools::pay_and_call::pay_and_call_unified(
+            args.url.as_deref(),
+            args.resource_id.as_deref(),
+            args.params.as_deref().unwrap_or("{}"),
+        ) {
             Ok(result) => serde_json::to_string_pretty(&result)
                 .unwrap_or_else(|e| format!("{{\"error\": \"Failed to serialize result: {e}\"}}")),
             Err(e) => e.to_structured_json(),

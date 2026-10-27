@@ -25,6 +25,8 @@ export interface CliSuccess {
     [key: string]: unknown;
   };
   rule_id?: number;
+  header_name?: string;
+  header_value?: string;
 }
 
 export interface CliError {

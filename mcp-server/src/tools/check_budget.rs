@@ -16,6 +16,7 @@ pub fn check_budget() -> BudgetStatus {
             remaining_xlm: remaining as f64 / 10_000_000.0,
             period_ledgers: 17_280,
             rule_count,
+            allowed_payees: None,
         };
     }
     load_budget()
