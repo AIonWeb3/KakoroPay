@@ -863,7 +863,6 @@ fn test_auth_decision_events_payee_approve_and_deny() {
     );
     assert!(has_auth_reason(&env, "invalid_context"));
 }
-
 #[test]
 fn test_get_payee_rule() {
     let (env, client, admin, _account) = setup();
@@ -981,10 +980,11 @@ fn test_policy_applied_event_payee_includes_rule_id_and_pay_to() {
         &admin,
         &payee_policy(&env, &asset, &payee, 5_000, 17280, 50),
     );
+    use soroban_sdk::xdr::ContractEventBody;
+    let events = env.host().get_events().unwrap().0;
     let rule_id = client.get_last_rule_id().unwrap();
 
-    use soroban_sdk::xdr::ContractEventBody;
-    let found = env.host().get_events().unwrap().0.iter().any(|ev| {
+    let found = events.iter().any(|ev| {
         let ContractEventBody::V0(body) = &ev.event.body;
         let formatted = std::format!("{body:?}");
         formatted.contains("policy_applied") && formatted.contains(&std::format!("{rule_id}"))

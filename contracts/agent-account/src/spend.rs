@@ -39,6 +39,10 @@ pub struct SpendPolicyParams {
     pub pay_to: Option<Address>,
 }
 
+// ---------------------------------------------------------------------------
+// Storage keys
+// ---------------------------------------------------------------------------
+
 #[contracttype]
 #[derive(Copy, Clone, Debug, PartialEq)]
 #[repr(u32)]
@@ -335,7 +339,6 @@ pub fn enforce(
             );
             panic_with_error!(env, AgentAccountError::InvalidContext);
         };
-
         // ---------------------------------------------------------------
         // Payee rule: enforce transfer(from, pay_to, amount) semantics
         // ---------------------------------------------------------------
