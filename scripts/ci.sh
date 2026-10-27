@@ -18,3 +18,8 @@ ruff check policy-generator demo tests scripts
 
 echo "==> pytest"
 pytest -q
+
+if [ -d "payer" ]; then
+  echo "==> payer: typecheck & test"
+  (cd payer && npm run typecheck && npm test)
+fi
