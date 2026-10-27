@@ -145,8 +145,13 @@ cargo test -p agent-account
 cargo run -p mcp-server
 ```
 
-The server starts on stdio. Tools take real arguments (`query`, `resource_id`,
-`params`). Connect any MCP-compatible client to use them.
+The server starts on stdio. Tools take real arguments:
+- `discover_resources(query)`: Search registry for matching resources.
+- `check_budget()`: Returns remaining spending allowance, budget period, and rule count.
+- `pay_and_call({ url, resource_id, params })`: Invoke either an x402 paid HTTPS URL or a registry resource ID.
+  - **URL mode (x402 flow)**: Fetches the URL with SSRF protection (HTTPS-only, blocks loopback/private/link-local/metadata IPs, redirects disabled, optional `ALLOWED_HOSTS`). On HTTP 402, validates payment requirements and policy prechecks (`get_payee_rule`, `PAYMENT_MAX_PER_CALL`, budget), executes the payer worker via `PAYER_CMD` (`PAYER_TIMEOUT_MS`), retries once with the worker's payment header, decodes settlement transaction hash, and returns `{ status, body, tx_hash, amount, asset, pay_to }`.
+  - **Registry mode (legacy)**: Invokes catalog vendor contract with parameter validation and smart account policy checks.
+  - **Structured error codes**: `InvalidUrl`, `BlockedTarget`, `PaymentRequirementsInvalid`, `NetworkMismatch`, `OverCeiling`, `PolicyDenied`, `BudgetExceeded`, `PayerFailed`, `PayerTimeout`, `FacilitatorRejected`, `SettlementMissing`, `InsufficientBudget`, `ResourceNotFound`, `ResourceCallFailed`.
 
 ### 3. Generate a Policy (Python)
 
