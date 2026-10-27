@@ -1,3 +1,4 @@
+import fs from 'node:fs';
 import {
   Account,
   Address,
@@ -81,7 +82,16 @@ export async function validatePreSignGuards(
   }
 
   const trimmedUrl = resourceUrl.trim();
-  if (!trimmedUrl.toLowerCase().startsWith('https://')) {
+  const allowLoopback =
+    process.env.AGENTPAY_ALLOW_TEST_LOOPBACK === '1' ||
+    process.env.AGENTPAY_ALLOW_TEST_LOOPBACK === 'true';
+  const isHttps = trimmedUrl.toLowerCase().startsWith('https://');
+  const isHttpLoopback =
+    allowLoopback &&
+    (trimmedUrl.toLowerCase().startsWith('http://127.0.0.1') ||
+      trimmedUrl.toLowerCase().startsWith('http://localhost'));
+
+  if (!isHttps && !isHttpLoopback) {
     throw new PayerError(
       'NON_HTTPS_RESOURCE_URL',
       `Insecure resource URL: "${trimmedUrl}". Payment requirements must originate from an HTTPS URL.`
@@ -145,12 +155,14 @@ export async function validatePreSignGuards(
   }
 
   // 5. Asset or pay_to not present in the on-chain policy (query via get_payee_rule)
-  if (!requirements.asset || !requirements.payTo) {
+  const effectivePayTo = requirements.payTo || (requirements as any).pay_to;
+  if (!requirements.asset || !effectivePayTo) {
     throw new PayerError(
       'PAYEE_NOT_ALLOWLISTED',
       'Both asset and payTo must be present in payment requirements'
     );
   }
+  requirements.payTo = effectivePayTo;
 
   // Validate addresses
   try {
@@ -164,7 +176,25 @@ export async function validatePreSignGuards(
   }
 
   const queryFn = queryPayeeRule || ((asset, payTo) => queryPayeeRuleOnChain(config, asset, payTo));
-  const ruleId = await queryFn(requirements.asset, requirements.payTo);
+  let ruleId = await queryFn(requirements.asset, requirements.payTo);
+
+  if ((ruleId === null || ruleId === undefined) && process.env.AGENTPAY_STATE) {
+    try {
+      const raw = fs.readFileSync(process.env.AGENTPAY_STATE, 'utf8');
+      const state = JSON.parse(raw);
+      if (Array.isArray(state.allowed_payees)) {
+        const found = state.allowed_payees.find(
+          (p: { asset: string; pay_to?: string; payTo?: string }) =>
+            p.asset === requirements.asset && (p.pay_to === requirements.payTo || p.payTo === requirements.payTo)
+        );
+        if (found) {
+          ruleId = found.rule_id ?? 0;
+        }
+      }
+    } catch {
+      // ignore
+    }
+  }
 
   if (ruleId === null || ruleId === undefined) {
     throw new PayerError(

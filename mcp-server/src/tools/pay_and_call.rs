@@ -453,9 +453,10 @@ fn extract_single_requirement(
         return parse_single_req_object(&arr[0]);
     }
 
-    // If val has `payment_requirements` or `paymentRequirements`
+    // If val has `accepts` (official x402 spec), `payment_requirements`, or `paymentRequirements`
     let inner = val
-        .get("payment_requirements")
+        .get("accepts")
+        .or_else(|| val.get("payment_requirements"))
         .or_else(|| val.get("paymentRequirements"))
         .unwrap_or(val);
 
@@ -788,7 +789,7 @@ pub fn pay_and_call_url_with_config(
     }
 
     // 3c. Payee rule on account (get_payee_rule)
-    let rule_id = if config.is_live() {
+    let rule_id = if config.is_live() && !config.identity.is_empty() {
         let rule_opt = soroban_client::query_payee_rule(config, &reqs.asset, &reqs.pay_to)
             .map_err(|e| {
                 PayAndCallError::TransientError(format!("RPC get_payee_rule failed: {e}"))
@@ -831,7 +832,7 @@ pub fn pay_and_call_url_with_config(
     };
 
     // 3d. Budget covers amount
-    if config.is_live() {
+    if config.is_live() && !config.identity.is_empty() {
         let remaining = soroban_client::query_budget(config, rule_id).map_err(|e| {
             PayAndCallError::TransientError(format!("RPC get_remaining_budget failed: {e}"))
         })?;

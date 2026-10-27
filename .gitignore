@@ -1,9 +1,12 @@
-__pycache__/
-*.pyc
-/target/
-/.build/
-/.build_account/
-/.build_mcp/
+# Node dependencies & builds
+node_modules/
+dist/
+
+# Rust build artifacts
+target/
+.build/
+.build_account/
+.build_mcp/
 *.rlib
 *.rmeta
 *.pdb
@@ -11,6 +14,34 @@ __pycache__/
 *.dll
 *.exp
 *.lib
+
+# Python caches, virtual environments & coverage
+__pycache__/
+*.pyc
+*.pyo
+.pytest_cache/
+.ruff_cache/
+.venv/
+venv/
+env/
+ENV/
+*.egg-info/
+.coverage
+coverage/
+htmlcov/
+
+# Environment secrets & local state
 .env
+.env.local
+.env.*.local
 *.db
+*.sqlite
 demo/data/
+tmp_e2e_state_*.json
+
+# Logs & OS / IDE artifacts
+*.log
+.vscode/
+.idea/
+.DS_Store
+Thumbs.db

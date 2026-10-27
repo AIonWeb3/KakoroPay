@@ -191,6 +191,15 @@ input {
 .approved { color: var(--ok); }
 .audit .row { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 8px; }
 .audit time { color: var(--muted); font-size: 11px; }
+.tx-link {
+  color: var(--mint);
+  text-decoration: underline;
+  margin-left: 4px;
+  font: 11px "IBM Plex Mono", monospace;
+}
+.tx-link:hover {
+  color: #fff;
+}
 
 @media (max-width: 900px) {
   .grid { grid-template-columns: 1fr; }

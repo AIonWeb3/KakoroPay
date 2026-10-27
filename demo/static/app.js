@@ -112,7 +112,9 @@ function render(state) {
   $("audit").innerHTML = (state.audit || [])
     .map((e) => {
       const cls = e.decision === "denied" ? "denied" : "approved";
-      const extra = e.tx_hash ? ` tx ${e.tx_hash}` : "";
+      const extra = e.tx_hash
+        ? ` <a class="tx-link" href="https://stellar.expert/explorer/testnet/tx/${e.tx_hash}" target="_blank" rel="noopener noreferrer">tx ${e.tx_hash.slice(0, 8)}…${e.tx_hash.slice(-6)} ↗</a>`
+        : "";
       return `<div class="row ${cls}"><span>${e.decision} · ${e.reason} · ${e.resource_id || "policy"} · ${e.amount} · rem ${e.remaining}${extra}</span><time>${relTime(e.ts)}</time></div>`;
     })
     .join("") || `<p class="empty">No auth_decision events yet.</p>`;
@@ -162,6 +164,9 @@ async function pay(id) {
       showToast(`${data.error}: ${data.reason || "policy denied"}`);
     } else {
       selectedId = id;
+      if (data.tx_hash) {
+        log(`Explorer: https://stellar.expert/explorer/testnet/tx/${data.tx_hash}`, "ok");
+      }
     }
     await refresh();
     return data;
@@ -202,15 +207,15 @@ const PITCH = [
     run: budget,
   },
   {
-    say: "4/6 pay_and_call succeeds under the weather cap. Spend is recorded on-chain.",
+    say: "4/6 pay_and_call succeeds under the weather cap via Soroban / x402. Spend is recorded on-chain.",
     run: () => pay("weather-oracle"),
   },
   {
-    say: "5/6 A second weather call exceeds the p95-derived cap and is denied.",
+    say: "5/6 A second weather call exceeds the p95-derived cap and is denied on-chain.",
     run: () => pay("weather-oracle"),
   },
   {
-    say: "6/6 Price feed is still allowed — policies are scoped per vendor, not a global wallet.",
+    say: "6/6 Price feed is still allowed — policies are scoped per vendor payee (asset, pay_to), not a global wallet.",
     run: () => pay("price-feed"),
   },
 ];

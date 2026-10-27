@@ -14,8 +14,11 @@ pub struct PayeeRule {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct BudgetStatus {
     pub remaining_stroops: i128,
+    #[serde(default)]
     pub remaining_xlm: f64,
+    #[serde(default)]
     pub period_ledgers: u32,
+    #[serde(default)]
     pub rule_count: u32,
     #[serde(default)]
     pub allowed_payees: Option<Vec<PayeeRule>>,
