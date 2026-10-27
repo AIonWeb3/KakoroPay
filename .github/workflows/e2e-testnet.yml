@@ -1,0 +1,68 @@
+name: E2E Testnet Nightly
+
+on:
+  schedule:
+    # Run every night at 03:00 UTC
+    - cron: "0 3 * * *"
+  workflow_dispatch:
+    inputs:
+      force_run:
+        description: "Force run even if live credentials are not set"
+        required: false
+        default: "false"
+
+jobs:
+  e2e-testnet:
+    name: E2E Testnet Run
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Rust
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+
+      - name: Install payer dependencies and build
+        working-directory: payer
+        run: |
+          npm ci
+          npm run build
+
+      - name: Install E2E harness dependencies and build
+        working-directory: tests/e2e
+        run: |
+          npm ci
+          npm run build
+
+      - name: Run E2E Testnet Harness
+        id: run_e2e
+        env:
+          AGENT_SIGNER_SECRET: ${{ secrets.AGENT_SIGNER_SECRET }}
+          ACCOUNT_CONTRACT_ID: ${{ secrets.ACCOUNT_CONTRACT_ID }}
+          STELLAR_IDENTITY: ${{ secrets.STELLAR_IDENTITY }}
+          SOROBAN_RPC_URL: ${{ secrets.SOROBAN_RPC_URL || 'https://soroban-testnet.stellar.org' }}
+          FACILITATOR_URL: ${{ secrets.FACILITATOR_URL || 'https://www.x402.org/facilitator' }}
+          FACILITATOR_API_KEY: ${{ secrets.FACILITATOR_API_KEY }}
+          STELLAR_NETWORK: "testnet"
+        run: |
+          if [ -z "${AGENT_SIGNER_SECRET:-}" ] || [ -z "${ACCOUNT_CONTRACT_ID:-}" ]; then
+            echo "::notice title=Testnet Secrets Absent::AGENT_SIGNER_SECRET or ACCOUNT_CONTRACT_ID is absent in repository secrets. Running protocol verification in simulation mode."
+          fi
+          node tests/e2e/dist/run_e2e.js 2>&1 | tee e2e_run.log
+
+      - name: Upload Testnet Proof and Logs Artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-testnet-proof-and-logs
+          path: |
+            TESTNET_PROOF.md
+            e2e_run.log
+          if-no-files-found: warn

@@ -20,3 +20,13 @@ def test_ci_runs_rust_and_python_gates():
         "ruff check",
     ):
         assert needle in text, f"CI workflow missing: {needle}"
+
+
+def test_e2e_testnet_workflow_exists():
+    e2e_workflow = ROOT / ".github" / "workflows" / "e2e-testnet.yml"
+    assert e2e_workflow.is_file()
+    text = e2e_workflow.read_text(encoding="utf-8")
+    assert "cron:" in text
+    assert "workflow_dispatch:" in text
+    assert "upload-artifact" in text
+
