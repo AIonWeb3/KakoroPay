@@ -124,7 +124,7 @@ export async function processPayment(
         options?.schemeClient ||
         new ExactStellarScheme(signer, { url: config.sorobanRpcUrl });
 
-      const x402Version: number = 1;
+      const x402Version = 1;
       const result = await schemeClient.createPaymentPayload(
         x402Version,
         paymentReqs as unknown as Parameters<ExactStellarScheme['createPaymentPayload']>[1]
