@@ -320,9 +320,13 @@ export async function runE2E(): Promise<void> {
       payRes2.parsed?.code ||
       (payRes2.raw.includes('PAYEE_NOT_ALLOWLISTED') ? 'PAYEE_NOT_ALLOWLISTED' : 'PolicyDenied');
     const denialReason =
-      payRes2.parsed?.message ||
-      payRes2.parsed?.error ||
-      `Off-allowlist payee ${disallowedPayee} rejected by policy`;
+      typeof payRes2.parsed?.message === 'string'
+        ? payRes2.parsed.message
+        : typeof payRes2.parsed?.error === 'string'
+        ? payRes2.parsed.error
+        : typeof payRes2.parsed?.error === 'object'
+        ? JSON.stringify(payRes2.parsed.error)
+        : `Off-allowlist payee ${disallowedPayee} rejected by policy`;
 
     console.log(`[Success] Verified denial for off-policy payee. Code: ${denialCode}`);
 
