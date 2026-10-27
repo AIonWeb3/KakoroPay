@@ -60,9 +60,13 @@ impl AgentPayServer {
         &self,
         Parameters(args): Parameters<DiscoverArgs>,
     ) -> Result<String, McpError> {
-        let results = tools::discover::search_resources(&args.query);
-        let text = serde_json::to_string_pretty(&results)
-            .unwrap_or_else(|e| format!("{{\"error\": \"Failed to serialize results: {e}\"}}"));
+        let text = tokio::task::spawn_blocking(move || {
+            let results = tools::discover::search_resources(&args.query);
+            serde_json::to_string_pretty(&results)
+                .unwrap_or_else(|e| format!("{{\"error\": \"Failed to serialize results: {e}\"}}"))
+        })
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(text)
     }
 
@@ -71,10 +75,14 @@ impl AgentPayServer {
         description = "Check the agent's remaining spending budget on the smart account. Returns remaining allowance in stroops and XLM, the budget period, and number of active rules."
     )]
     async fn check_budget(&self) -> Result<String, McpError> {
-        let status = tools::check_budget::check_budget();
-        let text = serde_json::to_string_pretty(&status).unwrap_or_else(|e| {
-            format!("{{\"error\": \"Failed to serialize budget status: {e}\"}}")
-        });
+        let text = tokio::task::spawn_blocking(|| {
+            let status = tools::check_budget::check_budget();
+            serde_json::to_string_pretty(&status).unwrap_or_else(|e| {
+                format!("{{\"error\": \"Failed to serialize budget status: {e}\"}}")
+            })
+        })
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(text)
     }
 
@@ -86,15 +94,20 @@ impl AgentPayServer {
         &self,
         Parameters(args): Parameters<PayArgs>,
     ) -> Result<String, McpError> {
-        let text = match tools::pay_and_call::pay_and_call_unified(
-            args.url.as_deref(),
-            args.resource_id.as_deref(),
-            args.params.as_deref().unwrap_or("{}"),
-        ) {
-            Ok(result) => serde_json::to_string_pretty(&result)
-                .unwrap_or_else(|e| format!("{{\"error\": \"Failed to serialize result: {e}\"}}")),
-            Err(e) => e.to_structured_json(),
-        };
+        let text = tokio::task::spawn_blocking(move || {
+            match tools::pay_and_call::pay_and_call_unified(
+                args.url.as_deref(),
+                args.resource_id.as_deref(),
+                args.params.as_deref().unwrap_or("{}"),
+            ) {
+                Ok(result) => serde_json::to_string_pretty(&result).unwrap_or_else(|e| {
+                    format!("{{\"error\": \"Failed to serialize result: {e}\"}}")
+                }),
+                Err(e) => e.to_structured_json(),
+            }
+        })
+        .await
+        .map_err(|e| McpError::internal_error(e.to_string(), None))?;
         Ok(text)
     }
 }

@@ -69,6 +69,7 @@ pub fn check_resource_payable(
     // Check live on-chain if live config is available
     let config = crate::soroban_client::SorobanConfig::from_env();
     if config.is_live()
+        && !config.identity.is_empty()
         && let (Some(asset), Some(pay_to)) = (asset_opt, pay_to_opt)
     {
         match crate::soroban_client::query_payee_rule(&config, asset, pay_to) {
