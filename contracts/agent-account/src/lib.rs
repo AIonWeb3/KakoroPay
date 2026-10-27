@@ -22,11 +22,12 @@ use soroban_sdk::{
     panic_with_error, Address, Env, IntoVal, Map, String, Symbol, Val, Vec,
 };
 use stellar_accounts::smart_account::{
-    add_context_rule, do_check_auth, AuthPayload, ContextRuleType, Signer, SmartAccountError,
+    add_context_rule, do_check_auth, get_context_rule, remove_context_rule, AuthPayload,
+    ContextRuleType, Signer, SmartAccountError,
 };
 
 use crate::agent_guard::Role;
-use crate::policy_spec::{AllowedContract, PolicySpec};
+use crate::policy_spec::{AllowedContract, AllowedPayee, PolicySpec};
 use crate::spend::SpendPolicyParams;
 
 #[contracttype]
@@ -37,6 +38,9 @@ pub enum DataKey {
     SpendPolicy,
     AgentGuard,
     RequiredRole,
+    /// Context-rule ids installed by apply/replace (framework ids, not a dense counter).
+    ActiveRuleIds,
+    LastRuleId,
 }
 
 #[contracterror]
@@ -164,66 +168,48 @@ impl AgentAccountContract {
         admin: Address,
         policy_spec: PolicySpec,
     ) -> Result<(), AgentAccountError> {
-        let stored_admin: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::Admin)
-            .ok_or(AgentAccountError::NotInitialized)?;
-        if admin != stored_admin {
-            return Err(AgentAccountError::Unauthorized);
+        authorize_admin(&env, &admin)?;
+        let added = install_spec(&env, &policy_spec)?;
+        let mut active = active_rule_ids(&env);
+        for i in 0..added.len() {
+            active.push_back(added.get(i).unwrap());
         }
-        admin.require_auth();
-
-        if policy_spec.allowed_contracts.len() == 0 {
-            return Err(AgentAccountError::EmptyPolicy);
-        }
-
-        let policy_contract: Address = env
-            .storage()
-            .instance()
-            .get(&DataKey::SpendPolicy)
-            .ok_or(AgentAccountError::NotInitialized)?;
-
-        let mut rule_count: u32 = env
-            .storage()
-            .instance()
-            .get(&DataKey::RuleCount)
-            .unwrap_or(0u32);
-
-        for i in 0..policy_spec.allowed_contracts.len() {
-            let allowed: AllowedContract = policy_spec.allowed_contracts.get(i).unwrap();
-
-            for j in 0..allowed.allowed_methods.len() {
-                let method = allowed.allowed_methods.get(j).unwrap();
-                let context_type = ContextRuleType::CallContract(allowed.contract_id.clone());
-                let signers: Vec<Signer> = Vec::new(&env);
-
-                let params = SpendPolicyParams {
-                    max_spend_per_period: allowed.max_spend_per_period,
-                    max_calls_per_period: allowed.max_calls_per_period,
-                    period_ledgers: policy_spec.period_ledgers,
-                    expected_method: method.clone(),
-                };
-                let mut policies: Map<Address, Val> = Map::new(&env);
-                policies.set(policy_contract.clone(), params.into_val(&env));
-
-                let rule_name = String::from_str(&env, "agent_rule");
-                add_context_rule(&env, &context_type, &rule_name, None, &signers, &policies);
-                rule_count += 1;
-
-                PolicyApplied {
-                    kind: Symbol::new(&env, "policy_applied"),
-                    contract_id: allowed.contract_id.clone(),
-                    method,
-                    max_spend_per_period: allowed.max_spend_per_period,
-                }
-                .publish(&env);
-            }
-        }
-
         env.storage()
             .instance()
-            .set(&DataKey::RuleCount, &rule_count);
+            .set(&DataKey::ActiveRuleIds, &active);
+        env.storage()
+            .instance()
+            .set(&DataKey::RuleCount, &active.len());
+        Ok(())
+    }
+
+    /// Drop every rule installed by this account, then install `policy_spec`.
+    pub fn replace_policy(
+        env: Env,
+        admin: Address,
+        policy_spec: PolicySpec,
+    ) -> Result<(), AgentAccountError> {
+        authorize_admin(&env, &admin)?;
+        clear_active_rules(&env);
+        let added = install_spec(&env, &policy_spec)?;
+        env.storage()
+            .instance()
+            .set(&DataKey::ActiveRuleIds, &added);
+        env.storage()
+            .instance()
+            .set(&DataKey::RuleCount, &added.len());
+        Ok(())
+    }
+
+    /// Remove installed rules and leave the account with an empty rule set.
+    pub fn revoke_policy(env: Env, admin: Address) -> Result<(), AgentAccountError> {
+        authorize_admin(&env, &admin)?;
+        clear_active_rules(&env);
+        let empty: Vec<u32> = Vec::new(&env);
+        env.storage()
+            .instance()
+            .set(&DataKey::ActiveRuleIds, &empty);
+        env.storage().instance().set(&DataKey::RuleCount, &0u32);
         Ok(())
     }
 
@@ -253,6 +239,14 @@ impl AgentAccountContract {
             .instance()
             .get(&DataKey::RuleCount)
             .unwrap_or(0u32)
+    }
+
+    pub fn get_last_rule_id(env: Env) -> Option<u32> {
+        env.storage().instance().get(&DataKey::LastRuleId)
+    }
+
+    pub fn rule_signer_count(env: Env, rule_id: u32) -> u32 {
+        get_context_rule(&env, rule_id).signers.len()
     }
 
     /// Policy interface (used when this wasm is deployed as the spend-policy instance).
@@ -292,6 +286,117 @@ impl AgentAccountContract {
     pub fn remaining_budget(env: Env, smart_account: Address, rule_id: u32) -> i128 {
         spend::budget_remaining(&env, &smart_account, rule_id)
     }
+}
+
+fn authorize_admin(env: &Env, admin: &Address) -> Result<(), AgentAccountError> {
+    let stored_admin: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::Admin)
+        .ok_or(AgentAccountError::NotInitialized)?;
+    if admin != &stored_admin {
+        return Err(AgentAccountError::Unauthorized);
+    }
+    admin.require_auth();
+    Ok(())
+}
+
+fn active_rule_ids(env: &Env) -> Vec<u32> {
+    env.storage()
+        .instance()
+        .get(&DataKey::ActiveRuleIds)
+        .unwrap_or_else(|| Vec::new(env))
+}
+
+fn clear_active_rules(env: &Env) {
+    let active = active_rule_ids(env);
+    for i in 0..active.len() {
+        remove_context_rule(env, active.get(i).unwrap());
+    }
+}
+
+fn install_spec(env: &Env, policy_spec: &PolicySpec) -> Result<Vec<u32>, AgentAccountError> {
+    if policy_spec.allowed_contracts.is_empty() && policy_spec.allowed_payees.is_empty() {
+        return Err(AgentAccountError::EmptyPolicy);
+    }
+    let policy_contract: Address = env
+        .storage()
+        .instance()
+        .get(&DataKey::SpendPolicy)
+        .ok_or(AgentAccountError::NotInitialized)?;
+
+    let account = env.current_contract_address();
+    let mut added: Vec<u32> = Vec::new(env);
+
+    // -----------------------------------------------------------------------
+    // Legacy AllowedContract rules (unchanged behaviour)
+    // -----------------------------------------------------------------------
+    for i in 0..policy_spec.allowed_contracts.len() {
+        let allowed: AllowedContract = policy_spec.allowed_contracts.get(i).unwrap();
+        for j in 0..allowed.allowed_methods.len() {
+            let method = allowed.allowed_methods.get(j).unwrap();
+            let context_type = ContextRuleType::CallContract(allowed.contract_id.clone());
+            let mut signers: Vec<Signer> = Vec::new(env);
+            if let Some(agent) = policy_spec.agent_signer.clone() {
+                signers.push_back(Signer::Delegated(agent));
+            }
+            let params = SpendPolicyParams {
+                max_spend_per_period: allowed.max_spend_per_period,
+                max_calls_per_period: allowed.max_calls_per_period,
+                period_ledgers: policy_spec.period_ledgers,
+                expected_method: method.clone(),
+            };
+            let mut policies: Map<Address, Val> = Map::new(env);
+            policies.set(policy_contract.clone(), params.into_val(env));
+            let rule_name = String::from_str(env, "agent_rule");
+            let rule = add_context_rule(env, &context_type, &rule_name, None, &signers, &policies);
+            added.push_back(rule.id);
+            env.storage().instance().set(&DataKey::LastRuleId, &rule.id);
+            PolicyApplied {
+                kind: Symbol::new(env, "policy_applied"),
+                contract_id: allowed.contract_id.clone(),
+                method,
+                max_spend_per_period: allowed.max_spend_per_period,
+            }
+            .publish(env);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Payee rules: one rule per (asset, pay_to) pair, scoped to "transfer"
+    // -----------------------------------------------------------------------
+    let transfer_sym = Symbol::new(env, "transfer");
+    for i in 0..policy_spec.allowed_payees.len() {
+        let payee: AllowedPayee = policy_spec.allowed_payees.get(i).unwrap();
+        let context_type = ContextRuleType::CallContract(payee.asset.clone());
+        let mut signers: Vec<Signer> = Vec::new(env);
+        if let Some(agent) = policy_spec.agent_signer.clone() {
+            signers.push_back(Signer::Delegated(agent));
+        }
+        let params = SpendPolicyParams {
+            max_spend_per_period: payee.max_spend_per_period,
+            max_calls_per_period: payee.max_calls_per_period,
+            period_ledgers: policy_spec.period_ledgers,
+            expected_method: transfer_sym.clone(),
+        };
+        let mut policies: Map<Address, Val> = Map::new(env);
+        policies.set(policy_contract.clone(), params.into_val(env));
+        let rule_name = String::from_str(env, "payee_rule");
+        let rule = add_context_rule(env, &context_type, &rule_name, None, &signers, &policies);
+        // Store the payee binding so enforce() can verify args[1]
+        spend::install_payee_binding(env, &account, rule.id, &payee.pay_to);
+        added.push_back(rule.id);
+        env.storage().instance().set(&DataKey::LastRuleId, &rule.id);
+        PolicyApplied {
+            kind: Symbol::new(env, "policy_applied"),
+            contract_id: payee.asset.clone(),
+            method: transfer_sym.clone(),
+            max_spend_per_period: payee.max_spend_per_period,
+        }
+        .publish(env);
+    }
+
+    Ok(added)
 }
 
 /// Read-only AgentGuard check before spend-policy effects in `do_check_auth`.

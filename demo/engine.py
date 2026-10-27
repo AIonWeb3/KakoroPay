@@ -31,7 +31,7 @@ sys.path.insert(0, str(ROOT / "policy-generator"))
 sys.path.insert(0, str(ROOT / "scripts"))
 
 from generate_policy import score_transactions  # noqa: E402
-from schema import PolicySpec  # noqa: E402
+from schema import AllowedPayee, PolicySpec  # noqa: E402
 from simulate_agent import generate_transaction_log  # noqa: E402
 
 REGISTRY_PATH = ROOT / "registry" / "resources.json"
@@ -74,6 +74,10 @@ class RuleState:
     spent: int = 0
     calls: int = 0
     last_reset: int = 0
+    # Payee binding — set for x402 / SEP-41 transfer rules.
+    # ``asset`` is the token contract; ``bound_pay_to`` is the locked recipient.
+    asset: str | None = None
+    bound_pay_to: str | None = None
 
 
 @dataclass
@@ -135,9 +139,7 @@ class AgentPayEngine:
         self._persist_session()
         if self.conn is not None:
             clear_audit(self.conn, self.session_id)
-        self.state.tx_log = generate_transaction_log(
-            num_transactions=75, span_hours=24, seed=42
-        )
+        self.state.tx_log = generate_transaction_log(num_transactions=75, span_hours=24, seed=42)
         spec = score_transactions(self.state.tx_log)
         self.state.policy = json.loads(spec.model_dump_json())
         self.state.period_ledgers = spec.period_ledgers
@@ -145,23 +147,45 @@ class AgentPayEngine:
         self.state.generated_at = spec.generated_at
 
         by_contract = {c.contract_id: c for c in spec.allowed_contracts}
+        # Index payees by (asset, pay_to) so resources can opt in
+        by_payee: dict[tuple, AllowedPayee] = {(p.asset, p.pay_to): p for p in spec.allowed_payees}
         if self.conn is not None:
             clear_rules(self.conn, self.session_id)
         for i, resource in enumerate(self.resources, start=1):
-            contract = by_contract.get(resource["contract_id"])
-            if not contract:
-                continue
-            rule = RuleState(
-                rule_id=i,
-                resource_id=resource["id"],
-                contract_id=resource["contract_id"],
-                method=resource["method"],
-                name=resource["name"],
-                price=int(resource["price"]),
-                max_spend_per_period=contract.max_spend_per_period,
-                max_calls_per_period=contract.max_calls_per_period,
-                last_reset=self.state.ledger,
-            )
+            asset = resource.get("asset", "")
+            pay_to = resource.get("pay_to", "")
+            if asset and pay_to:
+                payee = by_payee.get((asset, pay_to))
+                if not payee:
+                    continue
+                rule = RuleState(
+                    rule_id=i,
+                    resource_id=resource["id"],
+                    contract_id=asset,
+                    method="transfer",
+                    name=resource["name"],
+                    price=int(resource["price"]),
+                    max_spend_per_period=payee.max_spend_per_period,
+                    max_calls_per_period=payee.max_calls_per_period,
+                    last_reset=self.state.ledger,
+                    asset=asset,
+                    bound_pay_to=pay_to,
+                )
+            else:
+                contract = by_contract.get(resource["contract_id"])
+                if not contract:
+                    continue
+                rule = RuleState(
+                    rule_id=i,
+                    resource_id=resource["id"],
+                    contract_id=resource["contract_id"],
+                    method=resource["method"],
+                    name=resource["name"],
+                    price=int(resource["price"]),
+                    max_spend_per_period=contract.max_spend_per_period,
+                    max_calls_per_period=contract.max_calls_per_period,
+                    last_reset=self.state.ledger,
+                )
             self.state.rules.append(rule)
             if self.conn is not None:
                 insert_rule(
@@ -220,21 +244,42 @@ class AgentPayEngine:
         if self.conn is not None:
             clear_rules(self.conn, self.session_id)
         by_contract = {c.contract_id: c for c in spec.allowed_contracts}
+        by_payee: dict[tuple, AllowedPayee] = {(p.asset, p.pay_to): p for p in spec.allowed_payees}
         for i, resource in enumerate(self.resources, start=1):
-            contract = by_contract.get(resource["contract_id"])
-            if not contract:
-                continue
-            rule = RuleState(
-                rule_id=i,
-                resource_id=resource["id"],
-                contract_id=resource["contract_id"],
-                method=resource["method"],
-                name=resource["name"],
-                price=int(resource["price"]),
-                max_spend_per_period=contract.max_spend_per_period,
-                max_calls_per_period=contract.max_calls_per_period,
-                last_reset=self.state.ledger,
-            )
+            asset = resource.get("asset", "")
+            pay_to = resource.get("pay_to", "")
+            if asset and pay_to:
+                payee = by_payee.get((asset, pay_to))
+                if not payee:
+                    continue
+                rule = RuleState(
+                    rule_id=i,
+                    resource_id=resource["id"],
+                    contract_id=asset,
+                    method="transfer",
+                    name=resource["name"],
+                    price=int(resource["price"]),
+                    max_spend_per_period=payee.max_spend_per_period,
+                    max_calls_per_period=payee.max_calls_per_period,
+                    last_reset=self.state.ledger,
+                    asset=asset,
+                    bound_pay_to=pay_to,
+                )
+            else:
+                contract = by_contract.get(resource["contract_id"])
+                if not contract:
+                    continue
+                rule = RuleState(
+                    rule_id=i,
+                    resource_id=resource["id"],
+                    contract_id=resource["contract_id"],
+                    method=resource["method"],
+                    name=resource["name"],
+                    price=int(resource["price"]),
+                    max_spend_per_period=contract.max_spend_per_period,
+                    max_calls_per_period=contract.max_calls_per_period,
+                    last_reset=self.state.ledger,
+                )
             self.state.rules.append(rule)
             if self.conn is not None:
                 insert_rule(
@@ -322,6 +367,8 @@ class AgentPayEngine:
             max_spend=rule.max_spend_per_period,
             calls=rule.calls,
             max_calls=rule.max_calls_per_period,
+            pay_to=rule.bound_pay_to,  # same value → always matches in engine
+            bound_pay_to=rule.bound_pay_to,
         )
         if not decision.ok and decision.error == "PolicyDenied" and "rate" in decision.reason:
             self._audit("denied", "rate_limited", resource_id, amount, remaining)
@@ -336,8 +383,7 @@ class AgentPayEngine:
                 "ok": False,
                 "error": decision.error,
                 "reason": (
-                    f"required {amount} stroops, remaining {remaining} stroops "
-                    f"on {rule.name}"
+                    f"required {amount} stroops, remaining {remaining} stroops on {rule.name}"
                 ),
                 "required": amount,
                 "available": remaining,

@@ -1,13 +1,33 @@
 //! Spend and rate-limit policy invoked by the smart-account framework
 //! during `__check_auth` (`install` / `enforce` / `uninstall`).
+//!
+//! ## Payee-aware enforcement (x402 / SEP-41)
+//!
+//! When `PolicyKey::PayTo(account, rule_id)` is present the rule is a
+//! *payee rule* authorising only `transfer(from, to, amount)` on the
+//! bound token contract where:
+//!   - `fn_name == "transfer"`
+//!   - `args.len() == 3`
+//!   - `args[0]` is an `Address` equal to `smart_account`
+//!   - `args[1]` is an `Address` equal to the stored `pay_to`
+//!   - `args[2]` is an `i128 > 0`
+//!
+//! For legacy rules (no `PayTo` entry) the original first-i128 extraction
+//! is preserved and no payee-binding check is performed.
 
 use soroban_sdk::{
     auth::{Context, ContractContext},
-    contract, contractimpl, contracttype, panic_with_error, Address, Env, Symbol, TryFromVal, Vec,
+    contracttype, panic_with_error, Address, Env, Symbol, TryFromVal, Vec,
 };
+#[cfg(test)]
+use soroban_sdk::{contract, contractimpl};
 use stellar_accounts::smart_account::{ContextRule, ContextRuleType, Signer};
 
 use crate::{emit_auth_decision, AgentAccountError};
+
+// ---------------------------------------------------------------------------
+// Public params type (used by install)
+// ---------------------------------------------------------------------------
 
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
@@ -17,6 +37,10 @@ pub struct SpendPolicyParams {
     pub period_ledgers: u32,
     pub expected_method: Symbol,
 }
+
+// ---------------------------------------------------------------------------
+// Storage keys
+// ---------------------------------------------------------------------------
 
 #[contracttype]
 #[derive(Clone)]
@@ -29,7 +53,13 @@ pub enum PolicyKey {
     Calls(Address, u32),
     Contract(Address, u32),
     Method(Address, u32),
+    /// Present only for payee rules. Stores the bound recipient address.
+    PayTo(Address, u32),
 }
+
+// ---------------------------------------------------------------------------
+// Budget query
+// ---------------------------------------------------------------------------
 
 pub fn budget_remaining(env: &Env, smart_account: &Address, rule_id: u32) -> i128 {
     let cap: i128 = env
@@ -45,6 +75,10 @@ pub fn budget_remaining(env: &Env, smart_account: &Address, rule_id: u32) -> i12
         .unwrap_or(0);
     cap - spent
 }
+
+// ---------------------------------------------------------------------------
+// Rolling-window reset
+// ---------------------------------------------------------------------------
 
 fn reset_if_needed(env: &Env, account: &Address, rule_id: u32) {
     let last_reset: u32 = env
@@ -70,6 +104,10 @@ fn reset_if_needed(env: &Env, account: &Address, rule_id: u32) {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// install
+// ---------------------------------------------------------------------------
 
 pub fn install(
     env: &Env,
@@ -115,7 +153,22 @@ pub fn install(
         &PolicyKey::Method(smart_account.clone(), rule_id),
         &params.expected_method,
     );
+    // Note: PayTo is written by lib.rs::install_payee_binding() after install().
 }
+
+// ---------------------------------------------------------------------------
+// install_payee_binding — called by lib.rs after install() for payee rules
+// ---------------------------------------------------------------------------
+
+pub fn install_payee_binding(env: &Env, smart_account: &Address, rule_id: u32, pay_to: &Address) {
+    env.storage()
+        .persistent()
+        .set(&PolicyKey::PayTo(smart_account.clone(), rule_id), pay_to);
+}
+
+// ---------------------------------------------------------------------------
+// uninstall
+// ---------------------------------------------------------------------------
 
 pub fn uninstall(env: &Env, context_rule: &ContextRule, smart_account: &Address) {
     let rule_id = context_rule.id;
@@ -143,9 +196,19 @@ pub fn uninstall(env: &Env, context_rule: &ContextRule, smart_account: &Address)
         .remove(&PolicyKey::Contract(a.clone(), rule_id));
     env.storage()
         .persistent()
-        .remove(&PolicyKey::Method(a, rule_id));
+        .remove(&PolicyKey::Method(a.clone(), rule_id));
+    // Remove payee binding if present (no-op for legacy rules).
+    env.storage()
+        .persistent()
+        .remove(&PolicyKey::PayTo(a, rule_id));
 }
 
+// ---------------------------------------------------------------------------
+// Amount extraction
+// ---------------------------------------------------------------------------
+
+/// Legacy: return the first i128 found anywhere in args.
+/// Used by `__check_auth`'s approval event and by legacy rules.
 pub fn extract_amount(env: &Env, args: &Vec<soroban_sdk::Val>) -> i128 {
     for i in 0..args.len() {
         if let Some(v) = args.get(i) {
@@ -156,6 +219,42 @@ pub fn extract_amount(env: &Env, args: &Vec<soroban_sdk::Val>) -> i128 {
     }
     0
 }
+
+/// Parse `transfer(from: Address, to: Address, amount: i128)`.
+///
+/// Returns `Ok((to, amount))` when:
+///   - exactly 3 args
+///   - `args[0]` decodes as an `Address` equal to `smart_account`
+///   - `args[1]` decodes as an `Address`
+///   - `args[2]` decodes as `i128 > 0`
+///
+/// Returns `Err(InvalidContext)` for any violation.
+fn parse_transfer_args(
+    env: &Env,
+    args: &Vec<soroban_sdk::Val>,
+    smart_account: &Address,
+) -> Result<(Address, i128), AgentAccountError> {
+    if args.len() != 3 {
+        return Err(AgentAccountError::InvalidContext);
+    }
+    let from = Address::try_from_val(env, &args.get(0).unwrap())
+        .map_err(|_| AgentAccountError::InvalidContext)?;
+    if &from != smart_account {
+        return Err(AgentAccountError::InvalidContext);
+    }
+    let to = Address::try_from_val(env, &args.get(1).unwrap())
+        .map_err(|_| AgentAccountError::InvalidContext)?;
+    let amount = i128::try_from_val(env, &args.get(2).unwrap())
+        .map_err(|_| AgentAccountError::InvalidContext)?;
+    if amount <= 0 {
+        return Err(AgentAccountError::InvalidContext);
+    }
+    Ok((to, amount))
+}
+
+// ---------------------------------------------------------------------------
+// enforce
+// ---------------------------------------------------------------------------
 
 pub fn enforce(
     env: &Env,
@@ -192,19 +291,100 @@ pub fn enforce(
         .persistent()
         .get(&PolicyKey::Method(smart_account.clone(), rule_id));
 
-    let amount = extract_amount(env, args);
+    // Determine if this is a payee rule.
+    let bound_pay_to: Option<Address> = env
+        .storage()
+        .persistent()
+        .get(&PolicyKey::PayTo(smart_account.clone(), rule_id));
 
-    if expected_contract.as_ref() != Some(contract) || expected_method.as_ref() != Some(fn_name) {
-        emit_auth_decision(
-            env,
-            Symbol::new(env, "denied"),
-            Symbol::new(env, "invalid_context"),
-            amount,
-            rule_id,
-            Some(contract.clone()),
-            Some(fn_name.clone()),
-        );
-        panic_with_error!(env, AgentAccountError::InvalidContext);
+    let amount;
+
+    if bound_pay_to.is_some() {
+        // ---------------------------------------------------------------
+        // Payee rule: enforce transfer(from, pay_to, amount) semantics
+        // ---------------------------------------------------------------
+        let transfer_sym = Symbol::new(env, "transfer");
+
+        // fn_name must be "transfer"
+        if fn_name != &transfer_sym {
+            emit_auth_decision(
+                env,
+                Symbol::new(env, "denied"),
+                Symbol::new(env, "invalid_context"),
+                0,
+                rule_id,
+                Some(contract.clone()),
+                Some(fn_name.clone()),
+            );
+            panic_with_error!(env, AgentAccountError::InvalidContext);
+        }
+
+        // Contract must match stored asset
+        if expected_contract.as_ref() != Some(contract) {
+            emit_auth_decision(
+                env,
+                Symbol::new(env, "denied"),
+                Symbol::new(env, "invalid_context"),
+                0,
+                rule_id,
+                Some(contract.clone()),
+                Some(fn_name.clone()),
+            );
+            panic_with_error!(env, AgentAccountError::InvalidContext);
+        }
+
+        // Parse and validate transfer args
+        let (to, parsed_amount) = match parse_transfer_args(env, args, smart_account) {
+            Ok(v) => v,
+            Err(_) => {
+                emit_auth_decision(
+                    env,
+                    Symbol::new(env, "denied"),
+                    Symbol::new(env, "invalid_context"),
+                    0,
+                    rule_id,
+                    Some(contract.clone()),
+                    Some(fn_name.clone()),
+                );
+                panic_with_error!(env, AgentAccountError::InvalidContext);
+            }
+        };
+
+        // Verify recipient matches the bound pay_to
+        if Some(&to) != bound_pay_to.as_ref() {
+            emit_auth_decision(
+                env,
+                Symbol::new(env, "denied"),
+                Symbol::new(env, "invalid_context"),
+                0,
+                rule_id,
+                Some(contract.clone()),
+                Some(fn_name.clone()),
+            );
+            panic_with_error!(env, AgentAccountError::InvalidContext);
+        }
+
+        amount = parsed_amount;
+    } else {
+        // ---------------------------------------------------------------
+        // Legacy rule: contract + method check, first-i128 extraction
+        // ---------------------------------------------------------------
+        let legacy_amount = extract_amount(env, args);
+        amount = legacy_amount;
+
+        if expected_contract.as_ref() != Some(contract) || expected_method.as_ref() != Some(fn_name)
+        {
+            emit_auth_decision(
+                env,
+                Symbol::new(env, "denied"),
+                Symbol::new(env, "invalid_context"),
+                amount,
+                rule_id,
+                Some(contract.clone()),
+                Some(fn_name.clone()),
+            );
+            panic_with_error!(env, AgentAccountError::InvalidContext);
+        }
     }
 
     reset_if_needed(env, smart_account, rule_id);
@@ -276,11 +456,17 @@ pub fn enforce(
     );
 }
 
+// ---------------------------------------------------------------------------
+// Separate SpendPolicyContract instance
+// ---------------------------------------------------------------------------
+
 /// Separate contract instance so `PolicyClient` can call `install`/`enforce`
 /// without re-entering the smart account.
+#[cfg(test)]
 #[contract]
 pub struct SpendPolicyContract;
 
+#[cfg(test)]
 #[contractimpl]
 impl SpendPolicyContract {
     pub fn install(

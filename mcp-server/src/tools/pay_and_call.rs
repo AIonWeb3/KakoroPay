@@ -26,6 +26,8 @@ pub enum PayAndCallError {
     ResourceNotFound(String),
     /// A transient network error occurred (retryable).
     TransientError(String),
+    /// The atomic pay-and-call envelope was rejected before or during submit.
+    AuthFailed(String),
 }
 
 impl fmt::Display for PayAndCallError {
@@ -44,6 +46,7 @@ impl fmt::Display for PayAndCallError {
             Self::ResourceCallFailed(reason) => write!(f, "Resource call failed: {reason}"),
             Self::ResourceNotFound(id) => write!(f, "Resource not found: {id}"),
             Self::TransientError(msg) => write!(f, "Transient error (retryable): {msg}"),
+            Self::AuthFailed(msg) => write!(f, "Authorization failed: {msg}"),
         }
     }
 }
@@ -75,6 +78,9 @@ impl PayAndCallError {
             }),
             Self::TransientError(msg) => serde_json::json!({
                 "error": { "code": "TransientError", "message": msg }
+            }),
+            Self::AuthFailed(msg) => serde_json::json!({
+                "error": { "code": "AuthFailed", "message": msg }
             }),
         };
         serde_json::to_string_pretty(&value).unwrap_or_else(|_| self.to_string())
@@ -193,54 +199,50 @@ pub fn pay_and_call_with_config(
     }
 
     let (spent, calls, max_spend, max_calls) = window;
-    match evaluate_call(true, amount, spent, max_spend, calls, max_calls) {
-        PolicyOutcome::Denied { reason } => Err(PayAndCallError::PolicyDenied(reason)),
-        PolicyOutcome::InsufficientBudget {
-            required,
-            available,
-        } => Err(PayAndCallError::InsufficientBudget {
-            required,
-            available,
-        }),
-        PolicyOutcome::Allow { remaining: _ } => {
-            if config.is_live() {
-                retry_transient(|| -> Result<PayAndCallResult, PayAndCallError> {
-                    let submitted: (String, u32) = soroban_client::submit_transaction(
-                        config,
-                        &resource.contract_id,
-                        &resource.method,
-                        amount,
-                    )?;
-                    if submitted.0.starts_with("stub_") {
-                        return Err(PayAndCallError::TransientError(
-                            "refusing stub hash on live contract path".into(),
-                        ));
-                    }
-                    let resource_response = soroban_client::call_resource(
-                        config,
-                        &resource.contract_id,
-                        &resource.method,
-                        params,
-                    )?;
-                    Ok(PayAndCallResult {
-                        tx_hash: submitted.0,
-                        ledger: submitted.1,
-                        amount_spent: amount,
-                        resource_response,
-                    })
-                })
-            } else {
-                Ok(PayAndCallResult {
-                    tx_hash: local_tx_hash(resource_id, params),
-                    ledger: 0,
-                    amount_spent: amount,
-                    resource_response: format!(
-                        "{{\"status\": \"ok\", \"resource\": \"{}\", \"params\": {}}}",
-                        resource.name, params
-                    ),
-                })
+    let outcome = evaluate_call(true, amount, spent, max_spend, calls, max_calls);
+    if !crate::policy::allows_submission(&outcome) {
+        return match outcome {
+            PolicyOutcome::Denied { reason } => Err(PayAndCallError::PolicyDenied(reason)),
+            PolicyOutcome::InsufficientBudget {
+                required,
+                available,
+            } => Err(PayAndCallError::InsufficientBudget {
+                required,
+                available,
+            }),
+            PolicyOutcome::Allow { .. } => unreachable!(),
+        };
+    }
+    if config.is_live() {
+        retry_transient(|| -> Result<PayAndCallResult, PayAndCallError> {
+            let submitted = soroban_client::pay_and_call_tx(
+                config,
+                &resource.contract_id,
+                &resource.method,
+                amount,
+            )?;
+            if submitted.tx_hash.starts_with("stub_") {
+                return Err(PayAndCallError::TransientError(
+                    "refusing stub hash on live contract path".into(),
+                ));
             }
-        }
+            Ok(PayAndCallResult {
+                tx_hash: submitted.tx_hash,
+                ledger: submitted.ledger,
+                amount_spent: amount,
+                resource_response: submitted.response,
+            })
+        })
+    } else {
+        Ok(PayAndCallResult {
+            tx_hash: local_tx_hash(resource_id, params),
+            ledger: 0,
+            amount_spent: amount,
+            resource_response: format!(
+                "{{\"status\": \"ok\", \"resource\": \"{}\", \"params\": {}}}",
+                resource.name, params
+            ),
+        })
     }
 }
 

@@ -7,7 +7,12 @@ def test_reader_can_discover_and_budget(monkeypatch):
     monkeypatch.setenv(READER_ENV, "read-key")
     monkeypatch.setenv(OPERATOR_ENV, "op-key")
     headers = {"X-Api-Key": "read-key"}
-    assert asgi_request(app, "POST", "/api/discover", json={"query": "weather"}, headers=headers).status_code == 200
+    assert (
+        asgi_request(
+            app, "POST", "/api/discover", json={"query": "weather"}, headers=headers
+        ).status_code
+        == 200
+    )
     assert asgi_request(app, "GET", "/api/budget", headers=headers).status_code == 200
 
 

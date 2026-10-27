@@ -7,6 +7,7 @@ without needing a live agent. The log simulates an AI agent that:
 - Calls a weather oracle frequently (low cost)
 - Checks crypto prices regularly (medium cost)
 - Runs AI inference occasionally (high cost)
+- Makes x402-style SEP-41 token transfers to vendor payees (medium cost)
 - Has a mix of normal and outlier transactions
 
 Usage:
@@ -20,7 +21,7 @@ from __future__ import annotations
 import json
 import random
 from datetime import datetime, timedelta
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Optional
 
 # ---------------------------------------------------------------------------
 # Resource definitions (matching registry/resources.json)
@@ -31,31 +32,43 @@ RESOURCES = [
         "contract_id": "CDLZFC3SYJYDZT7K67VZ75HPJVIEUVNIXF47ZG2FB2RMQQVU2HHGCYSC",
         "method": "get_weather",
         "base_price": 50,
-        "frequency": 0.5,   # 50% of transactions
-        "variance": 0.1,    # Low price variance
+        "frequency": 0.4,  # 40% of transactions
+        "variance": 0.1,  # Low price variance
+        # No asset/pay_to → legacy AllowedContract path
     },
     {
         "contract_id": "CBQHNAXSI55GX2GN6D67GK7BHVPSLJUGZQEU7WJ5LKR5PNUCGLIMAO4K",
         "method": "get_price",
         "base_price": 100,
-        "frequency": 0.35,  # 35% of transactions
-        "variance": 0.2,    # Medium price variance
+        "frequency": 0.30,  # 30% of transactions
+        "variance": 0.2,  # Medium price variance
     },
     {
         "contract_id": "CA7QYNF7SOVZ3SS4KVQNHOACI3BSZAHH7KX4IXOFCPXBZW32PCBHFCLJ",
         "method": "run_inference",
         "base_price": 500,
         "frequency": 0.15,  # 15% of transactions
-        "variance": 0.5,    # High price variance (different prompt sizes)
+        "variance": 0.5,  # High price variance (different prompt sizes)
+    },
+    # x402-style SEP-41 transfer to a vendor payee
+    {
+        "contract_id": "CDEMO5TOKN1ASSET1ADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+        "method": "transfer",
+        "base_price": 200,
+        "frequency": 0.15,  # 15% of transactions
+        "variance": 0.25,
+        # Payee identity fields — present → AllowedPayee path in generator
+        "asset": "CDEMO5TOKN1ASSET1ADDRESSXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
+        "pay_to": "GDEMO5VENDOR1PAYEEADDRESXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXXX",
     },
 ]
 
 
 def generate_transaction_log(
     num_transactions: int = 75,
-    start_time: datetime | None = None,
+    start_time: Optional[datetime] = None,
     span_hours: int = 24,
-    seed: int | None = None,
+    seed: Optional[int] = None,
 ) -> List[Dict[str, Any]]:
     """
     Generate a synthetic transaction log.
@@ -101,12 +114,20 @@ def generate_transaction_log(
         offset_seconds = random.uniform(0, span_hours * 3600)
         timestamp = start_time + timedelta(seconds=offset_seconds)
 
-        transactions.append({
+        tx: Dict[str, Any] = {
             "contract_id": resource["contract_id"],
             "method": resource["method"],
             "amount": amount,
             "timestamp": timestamp.strftime("%Y-%m-%dT%H:%M:%SZ"),
-        })
+        }
+
+        # Include payee fields when present (x402 / SEP-41 path)
+        if "asset" in resource:
+            tx["asset"] = resource["asset"]
+        if "pay_to" in resource:
+            tx["pay_to"] = resource["pay_to"]
+
+        transactions.append(tx)
 
     # Sort by timestamp
     transactions.sort(key=lambda tx: tx["timestamp"])
@@ -117,6 +138,7 @@ def generate_transaction_log(
 # ---------------------------------------------------------------------------
 # CLI entry point
 # ---------------------------------------------------------------------------
+
 
 def main() -> None:
     """Generate and print a synthetic transaction log."""
@@ -130,15 +152,23 @@ def main() -> None:
 
     # Print summary to stderr so it doesn't interfere with piping
     import sys
+
     print(f"\n# Generated {len(tx_log)} transactions", file=sys.stderr)
 
     contract_counts: Dict[str, int] = {}
+    payee_counts: Dict[str, int] = {}
     for tx in tx_log:
-        cid = tx["contract_id"][:8] + "..."
-        contract_counts[cid] = contract_counts.get(cid, 0) + 1
+        if tx.get("asset") and tx.get("pay_to"):
+            key = f"payee:{tx['pay_to'][:8]}..."
+            payee_counts[key] = payee_counts.get(key, 0) + 1
+        else:
+            cid = tx["contract_id"][:8] + "..."
+            contract_counts[cid] = contract_counts.get(cid, 0) + 1
 
     for cid, count in sorted(contract_counts.items()):
-        print(f"#   {cid}: {count} txs", file=sys.stderr)
+        print(f"#   {cid}: {count} txs (legacy contract)", file=sys.stderr)
+    for key, count in sorted(payee_counts.items()):
+        print(f"#   {key}: {count} txs (x402 payee)", file=sys.stderr)
 
 
 if __name__ == "__main__":
