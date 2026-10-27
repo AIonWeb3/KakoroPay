@@ -7,7 +7,7 @@ extern crate std;
 
 use soroban_sdk::{
     auth::{Context, ContractContext},
-    testutils::{Address as _, Events, Ledger},
+    testutils::{Address as _, Ledger},
     vec, Address, Bytes, BytesN, Env, IntoVal, Map, Symbol, Val, Vec,
 };
 use stellar_accounts::smart_account::{AuthPayload, Signer};
@@ -160,8 +160,8 @@ fn try_auth_ctx(env: &Env, account: &Address, ctx: Context, rule_id: u32) -> Res
 
 fn has_auth_reason(env: &Env, reason: &str) -> bool {
     use soroban_sdk::xdr::ContractEventBody;
-    env.events().all().events().iter().any(|ev| {
-        let ContractEventBody::V0(body) = &ev.body;
+    env.host().get_events().unwrap().0.iter().any(|ev| {
+        let ContractEventBody::V0(body) = &ev.event.body;
         std::format!("{body:?}").contains(reason)
     })
 }

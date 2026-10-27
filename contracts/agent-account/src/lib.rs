@@ -325,7 +325,6 @@ fn install_spec(env: &Env, policy_spec: &PolicySpec) -> Result<Vec<u32>, AgentAc
         .get(&DataKey::SpendPolicy)
         .ok_or(AgentAccountError::NotInitialized)?;
 
-    let account = env.current_contract_address();
     let mut added: Vec<u32> = Vec::new(env);
 
     // -----------------------------------------------------------------------
@@ -345,6 +344,7 @@ fn install_spec(env: &Env, policy_spec: &PolicySpec) -> Result<Vec<u32>, AgentAc
                 max_calls_per_period: allowed.max_calls_per_period,
                 period_ledgers: policy_spec.period_ledgers,
                 expected_method: method.clone(),
+                pay_to: None,
             };
             let mut policies: Map<Address, Val> = Map::new(env);
             policies.set(policy_contract.clone(), params.into_val(env));
@@ -378,13 +378,12 @@ fn install_spec(env: &Env, policy_spec: &PolicySpec) -> Result<Vec<u32>, AgentAc
             max_calls_per_period: payee.max_calls_per_period,
             period_ledgers: policy_spec.period_ledgers,
             expected_method: transfer_sym.clone(),
+            pay_to: Some(payee.pay_to.clone()),
         };
         let mut policies: Map<Address, Val> = Map::new(env);
         policies.set(policy_contract.clone(), params.into_val(env));
         let rule_name = String::from_str(env, "payee_rule");
         let rule = add_context_rule(env, &context_type, &rule_name, None, &signers, &policies);
-        // Store the payee binding so enforce() can verify args[1]
-        spend::install_payee_binding(env, &account, rule.id, &payee.pay_to);
         added.push_back(rule.id);
         env.storage().instance().set(&DataKey::LastRuleId, &rule.id);
         PolicyApplied {

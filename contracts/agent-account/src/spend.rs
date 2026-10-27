@@ -36,6 +36,7 @@ pub struct SpendPolicyParams {
     pub max_calls_per_period: u32,
     pub period_ledgers: u32,
     pub expected_method: Symbol,
+    pub pay_to: Option<Address>,
 }
 
 // ---------------------------------------------------------------------------
@@ -153,17 +154,11 @@ pub fn install(
         &PolicyKey::Method(smart_account.clone(), rule_id),
         &params.expected_method,
     );
-    // Note: PayTo is written by lib.rs::install_payee_binding() after install().
-}
-
-// ---------------------------------------------------------------------------
-// install_payee_binding — called by lib.rs after install() for payee rules
-// ---------------------------------------------------------------------------
-
-pub fn install_payee_binding(env: &Env, smart_account: &Address, rule_id: u32, pay_to: &Address) {
-    env.storage()
-        .persistent()
-        .set(&PolicyKey::PayTo(smart_account.clone(), rule_id), pay_to);
+    if let Some(ref to) = params.pay_to {
+        env.storage()
+            .persistent()
+            .set(&PolicyKey::PayTo(smart_account.clone(), rule_id), to);
+    }
 }
 
 // ---------------------------------------------------------------------------
