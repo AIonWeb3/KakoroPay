@@ -39,6 +39,14 @@ pub struct SpendPolicyParams {
     pub pay_to: Option<Address>,
 }
 
+#[contracttype]
+#[derive(Copy, Clone, Debug, PartialEq)]
+#[repr(u32)]
+pub enum RuleKind {
+    Legacy = 0,
+    Payee = 1,
+}
+
 // ---------------------------------------------------------------------------
 // Storage keys
 // ---------------------------------------------------------------------------
@@ -54,6 +62,8 @@ pub enum PolicyKey {
     Calls(Address, u32),
     Contract(Address, u32),
     Method(Address, u32),
+    /// Explicit rule kind (Legacy or Payee).
+    Kind(Address, u32),
     /// Present only for payee rules. Stores the bound recipient address.
     PayTo(Address, u32),
 }
@@ -154,6 +164,14 @@ pub fn install(
         &PolicyKey::Method(smart_account.clone(), rule_id),
         &params.expected_method,
     );
+    let kind = if params.pay_to.is_some() {
+        RuleKind::Payee
+    } else {
+        RuleKind::Legacy
+    };
+    env.storage()
+        .persistent()
+        .set(&PolicyKey::Kind(smart_account.clone(), rule_id), &kind);
     if let Some(ref to) = params.pay_to {
         env.storage()
             .persistent()
@@ -192,6 +210,9 @@ pub fn uninstall(env: &Env, context_rule: &ContextRule, smart_account: &Address)
     env.storage()
         .persistent()
         .remove(&PolicyKey::Method(a.clone(), rule_id));
+    env.storage()
+        .persistent()
+        .remove(&PolicyKey::Kind(a.clone(), rule_id));
     // Remove payee binding if present (no-op for legacy rules).
     env.storage()
         .persistent()
@@ -286,7 +307,14 @@ pub fn enforce(
         .persistent()
         .get(&PolicyKey::Method(smart_account.clone(), rule_id));
 
-    // Determine if this is a payee rule.
+    // Check explicit rule kind.
+    let rule_kind: RuleKind = env
+        .storage()
+        .persistent()
+        .get(&PolicyKey::Kind(smart_account.clone(), rule_id))
+        .unwrap_or(RuleKind::Legacy);
+
+    // Determine bound recipient if present.
     let bound_pay_to: Option<Address> = env
         .storage()
         .persistent()
@@ -294,7 +322,20 @@ pub fn enforce(
 
     let amount;
 
-    if bound_pay_to.is_some() {
+    if rule_kind == RuleKind::Payee {
+        let Some(ref expected_pay_to) = bound_pay_to else {
+            emit_auth_decision(
+                env,
+                Symbol::new(env, "denied"),
+                Symbol::new(env, "invalid_context"),
+                0,
+                rule_id,
+                Some(contract.clone()),
+                Some(fn_name.clone()),
+            );
+            panic_with_error!(env, AgentAccountError::InvalidContext);
+        };
+
         // ---------------------------------------------------------------
         // Payee rule: enforce transfer(from, pay_to, amount) semantics
         // ---------------------------------------------------------------
@@ -346,7 +387,7 @@ pub fn enforce(
         };
 
         // Verify recipient matches the bound pay_to
-        if Some(&to) != bound_pay_to.as_ref() {
+        if &to != expected_pay_to {
             emit_auth_decision(
                 env,
                 Symbol::new(env, "denied"),

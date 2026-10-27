@@ -863,3 +863,134 @@ fn test_auth_decision_events_payee_approve_and_deny() {
     );
     assert!(has_auth_reason(&env, "invalid_context"));
 }
+
+#[test]
+fn test_get_payee_rule() {
+    let (env, client, admin, _account) = setup();
+    let asset = Address::generate(&env);
+    let payee = Address::generate(&env);
+    let other_payee = Address::generate(&env);
+    let other_asset = Address::generate(&env);
+
+    client.apply_policy(
+        &admin,
+        &payee_policy(&env, &asset, &payee, 1_000, 17280, 100),
+    );
+    let rule_id = client.get_last_rule_id().unwrap();
+
+    assert_eq!(client.get_payee_rule(&asset, &payee), Some(rule_id));
+    assert_eq!(client.get_payee_rule(&asset, &other_payee), None);
+    assert_eq!(client.get_payee_rule(&other_asset, &payee), None);
+
+    // Test replace clears and re-sets
+    let new_payee = Address::generate(&env);
+    client.replace_policy(
+        &admin,
+        &payee_policy(&env, &asset, &new_payee, 2_000, 17280, 50),
+    );
+    let new_rule_id = client.get_last_rule_id().unwrap();
+    assert_eq!(client.get_payee_rule(&asset, &payee), None);
+    assert_eq!(client.get_payee_rule(&asset, &new_payee), Some(new_rule_id));
+
+    // Test revoke clears payee rules
+    client.revoke_policy(&admin);
+    assert_eq!(client.get_payee_rule(&asset, &new_payee), None);
+}
+
+#[test]
+fn test_hardened_payee_rule_denies_without_pay_to_binding() {
+    let env = Env::default();
+    env.mock_all_auths();
+
+    let policy_contract = env.register(SpendPolicyContract, ());
+    let account = env.register(AgentAccountContract, ());
+    let client = AgentAccountContractClient::new(&env, &account);
+    let admin = Address::generate(&env);
+    client.initialize(&admin);
+    client.set_spend_policy(&admin, &policy_contract);
+
+    let asset = Address::generate(&env);
+    let payee = Address::generate(&env);
+
+    client.apply_policy(
+        &admin,
+        &payee_policy(&env, &asset, &payee, 1_000, 17280, 100),
+    );
+    let rule_id = client.get_last_rule_id().unwrap();
+
+    // Verify it works normally
+    assert!(try_auth_ctx(
+        &env,
+        &account,
+        transfer_ctx(&env, &asset, &account, &payee, 100),
+        rule_id
+    )
+    .is_ok());
+
+    // Corrupt storage on policy contract: remove PayTo key while Kind is still Payee
+    env.as_contract(&policy_contract, || {
+        env.storage()
+            .persistent()
+            .remove(&crate::spend::PolicyKey::PayTo(account.clone(), rule_id));
+    });
+
+    // Enforcement must deny with InvalidContext (code 7) and NOT fall through to legacy
+    let err = try_auth_ctx(
+        &env,
+        &account,
+        transfer_ctx(&env, &asset, &account, &payee, 100),
+        rule_id,
+    )
+    .unwrap_err();
+    assert_eq!(err, 7);
+    assert!(has_auth_reason(&env, "invalid_context"));
+}
+
+#[test]
+fn test_install_spec_rejects_allowed_contract_with_transfer() {
+    let (env, client, admin, _account) = setup();
+    let contract_id = Address::generate(&env);
+
+    let allowed = crate::policy_spec::AllowedContract {
+        contract_id,
+        allowed_methods: soroban_sdk::vec![&env, Symbol::new(&env, "transfer")],
+        max_spend_per_period: 1_000,
+        max_calls_per_period: 10,
+    };
+    let spec = crate::policy_spec::PolicySpec {
+        agent_signer: None,
+        period_ledgers: 17280,
+        allowed_contracts: soroban_sdk::vec![&env, allowed],
+        allowed_payees: soroban_sdk::vec![&env],
+    };
+
+    let res = client.try_apply_policy(&admin, &spec);
+    assert_eq!(
+        res.unwrap_err(),
+        Ok(crate::AgentAccountError::InvalidContext)
+    );
+}
+
+#[test]
+fn test_policy_applied_event_payee_includes_rule_id_and_pay_to() {
+    let (env, client, admin, _account) = setup();
+    let asset = Address::generate(&env);
+    let payee = Address::generate(&env);
+
+    client.apply_policy(
+        &admin,
+        &payee_policy(&env, &asset, &payee, 5_000, 17280, 50),
+    );
+    let rule_id = client.get_last_rule_id().unwrap();
+
+    use soroban_sdk::xdr::ContractEventBody;
+    let found = env.host().get_events().unwrap().0.iter().any(|ev| {
+        let ContractEventBody::V0(body) = &ev.event.body;
+        let formatted = std::format!("{body:?}");
+        formatted.contains("policy_applied") && formatted.contains(&std::format!("{rule_id}"))
+    });
+    assert!(
+        found,
+        "policy_applied event should include rule_id and pay_to"
+    );
+}

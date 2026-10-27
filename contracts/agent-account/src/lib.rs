@@ -41,6 +41,8 @@ pub enum DataKey {
     /// Context-rule ids installed by apply/replace (framework ids, not a dense counter).
     ActiveRuleIds,
     LastRuleId,
+    PayeeRule(Address, Address),
+    PayeeKeys,
 }
 
 #[contracterror]
@@ -100,6 +102,8 @@ pub struct PolicyApplied {
     pub contract_id: Address,
     pub method: Symbol,
     pub max_spend_per_period: i128,
+    pub rule_id: Option<u32>,
+    pub pay_to: Option<Address>,
 }
 
 #[contract]
@@ -245,6 +249,12 @@ impl AgentAccountContract {
         env.storage().instance().get(&DataKey::LastRuleId)
     }
 
+    pub fn get_payee_rule(env: Env, asset: Address, pay_to: Address) -> Option<u32> {
+        env.storage()
+            .instance()
+            .get(&DataKey::PayeeRule(asset, pay_to))
+    }
+
     pub fn rule_signer_count(env: Env, rule_id: u32) -> u32 {
         get_context_rule(&env, rule_id).signers.len()
     }
@@ -313,6 +323,19 @@ fn clear_active_rules(env: &Env) {
     for i in 0..active.len() {
         remove_context_rule(env, active.get(i).unwrap());
     }
+    if let Some(keys) = env
+        .storage()
+        .instance()
+        .get::<_, Vec<(Address, Address)>>(&DataKey::PayeeKeys)
+    {
+        for i in 0..keys.len() {
+            let (asset, pay_to) = keys.get(i).unwrap();
+            env.storage()
+                .instance()
+                .remove(&DataKey::PayeeRule(asset, pay_to));
+        }
+        env.storage().instance().remove(&DataKey::PayeeKeys);
+    }
 }
 
 fn install_spec(env: &Env, policy_spec: &PolicySpec) -> Result<Vec<u32>, AgentAccountError> {
@@ -330,10 +353,14 @@ fn install_spec(env: &Env, policy_spec: &PolicySpec) -> Result<Vec<u32>, AgentAc
     // -----------------------------------------------------------------------
     // Legacy AllowedContract rules (unchanged behaviour)
     // -----------------------------------------------------------------------
+    let transfer_sym = Symbol::new(env, "transfer");
     for i in 0..policy_spec.allowed_contracts.len() {
         let allowed: AllowedContract = policy_spec.allowed_contracts.get(i).unwrap();
         for j in 0..allowed.allowed_methods.len() {
             let method = allowed.allowed_methods.get(j).unwrap();
+            if method == transfer_sym {
+                return Err(AgentAccountError::InvalidContext);
+            }
             let context_type = ContextRuleType::CallContract(allowed.contract_id.clone());
             let mut signers: Vec<Signer> = Vec::new(env);
             if let Some(agent) = policy_spec.agent_signer.clone() {
@@ -357,6 +384,8 @@ fn install_spec(env: &Env, policy_spec: &PolicySpec) -> Result<Vec<u32>, AgentAc
                 contract_id: allowed.contract_id.clone(),
                 method,
                 max_spend_per_period: allowed.max_spend_per_period,
+                rule_id: Some(rule.id),
+                pay_to: None,
             }
             .publish(env);
         }
@@ -365,7 +394,11 @@ fn install_spec(env: &Env, policy_spec: &PolicySpec) -> Result<Vec<u32>, AgentAc
     // -----------------------------------------------------------------------
     // Payee rules: one rule per (asset, pay_to) pair, scoped to "transfer"
     // -----------------------------------------------------------------------
-    let transfer_sym = Symbol::new(env, "transfer");
+    let mut payee_keys: Vec<(Address, Address)> = env
+        .storage()
+        .instance()
+        .get(&DataKey::PayeeKeys)
+        .unwrap_or_else(|| Vec::new(env));
     for i in 0..policy_spec.allowed_payees.len() {
         let payee: AllowedPayee = policy_spec.allowed_payees.get(i).unwrap();
         let context_type = ContextRuleType::CallContract(payee.asset.clone());
@@ -386,14 +419,24 @@ fn install_spec(env: &Env, policy_spec: &PolicySpec) -> Result<Vec<u32>, AgentAc
         let rule = add_context_rule(env, &context_type, &rule_name, None, &signers, &policies);
         added.push_back(rule.id);
         env.storage().instance().set(&DataKey::LastRuleId, &rule.id);
+        env.storage().instance().set(
+            &DataKey::PayeeRule(payee.asset.clone(), payee.pay_to.clone()),
+            &rule.id,
+        );
+        payee_keys.push_back((payee.asset.clone(), payee.pay_to.clone()));
         PolicyApplied {
             kind: Symbol::new(env, "policy_applied"),
             contract_id: payee.asset.clone(),
             method: transfer_sym.clone(),
             max_spend_per_period: payee.max_spend_per_period,
+            rule_id: Some(rule.id),
+            pay_to: Some(payee.pay_to.clone()),
         }
         .publish(env);
     }
+    env.storage()
+        .instance()
+        .set(&DataKey::PayeeKeys, &payee_keys);
 
     Ok(added)
 }
