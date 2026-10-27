@@ -38,3 +38,23 @@ jobs:
         run: ruff check policy-generator demo tests scripts
       - name: Tests
         run: pytest -q
+
+  payer:
+    name: TypeScript Payer
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+      - name: Install dependencies
+        working-directory: payer
+        run: npm ci
+      - name: Lint & Typecheck
+        working-directory: payer
+        run: |
+          npm run lint
+          npm run typecheck
+      - name: Unit Tests
+        working-directory: payer
+        run: npm test
