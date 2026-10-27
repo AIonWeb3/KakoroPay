@@ -124,16 +124,21 @@ export async function processPayment(
         options?.schemeClient ||
         new ExactStellarScheme(signer, { url: config.sorobanRpcUrl });
 
-      const x402Version = 1;
+      const x402Version: number = 1;
       const result = await schemeClient.createPaymentPayload(
         x402Version,
         paymentReqs as unknown as Parameters<ExactStellarScheme['createPaymentPayload']>[1]
       );
 
+      const headerName = (result as { x402Version?: number }).x402Version === 2 ? 'PAYMENT-SIGNATURE' : 'X-PAYMENT';
+      const headerValue = Buffer.from(JSON.stringify(result.payload)).toString('base64');
+
       return {
         ok: true,
         payment_payload: result.payload as { transaction: string; [k: string]: unknown },
         rule_id: ruleId,
+        header_name: headerName,
+        header_value: headerValue,
       };
     } catch (simError) {
       const { code, message } = mapSimulationError(simError);
